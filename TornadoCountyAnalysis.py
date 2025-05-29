@@ -1,14 +1,17 @@
 # This script uses GIS analysis to create an Excel spreadsheet listing tornado counts, track lengths, and track areas
 # by county and state, using the latest data available from the Storm Prediction Center's database.
 
-import os, requests, pandas, geopandas, zipfile # type: ignore
+import os, requests, pandas, geopandas, zipfile, matplotlib, folium, mapclassify, webbrowser # type: ignore
 from shapely.geometry import Point, LineString # type: ignore
+from matplotlib import pyplot as plt # type : ignore
+from matplotlib.backends.backend_pdf import PdfPages
 
 # Globals
 working_folder = "C:\Dev\TornadoCountyAnalysis"  #Set the folder to save output to
 PROJECT_SR = 'ESRI:102005'  #USA_Contiguous_Equidistant_Conic is the spatial reference for the project
 tornado_file_url = "https://www.spc.noaa.gov/wcm/data/1950-2024_actual_tornadoes.csv"  #URL to download the tornado CSV file from
 county_file_url = "https://www.weather.gov/source/gis/Shapefiles/County/c_18mr25.zip"  #URL to download the county shapefile from
+states_file_url = "https://www.weather.gov/source/gis/Shapefiles/County/s_18mr25.zip"  #URL to download the state shapefile from
 
 # This function downloads a file from a specified URL to a specified folder with a specified file name.
 def download_file_from_url(url, workspace, filename):
@@ -76,6 +79,9 @@ def summarize_tornadoes_by_county(counties_gdf, tornadoes_gdf):
     counties_gdf = counties_gdf.merge(count_df[["FIPS", "count"]], on="FIPS", how="left")
     counties_gdf = counties_gdf.merge(mag_df[["FIPS", "sum_mag"]], on="FIPS", how="left")
     counties_gdf = counties_gdf.merge(len_df[["FIPS", "sum_len"]], on="FIPS", how="left")
+    counties_gdf['count'] = counties_gdf['count'].fillna(0)
+    counties_gdf['sum_mag'] = counties_gdf['sum_mag'].fillna(0)
+    counties_gdf['sum_len'] = counties_gdf['sum_len'].fillna(0)
 
     # normalize by county area
     M2_TO_MI2 = 2589988.110336  #constant - square meters in a square mile
@@ -84,14 +90,42 @@ def summarize_tornadoes_by_county(counties_gdf, tornadoes_gdf):
     counties_gdf["tor_sqmi"] = counties_gdf["count"] / counties_gdf["area_sqmi"]
     counties_gdf["mag_sqmi"] = counties_gdf["sum_mag"] / counties_gdf["area_sqmi"]
     counties_gdf["len_sqmi"] = counties_gdf["sum_len"] / counties_gdf["area_sqmi"]
-    print(counties_gdf.head())
-
+    
     return counties_gdf
+
+def create_static_map(counties, states, map_title, sym_column, color_map, legend_title, scheme, out_file_name):
+    out_path = os.path.join(working_folder, out_file_name)
+    with PdfPages(out_path) as pdf:
+        fig, ax = plt.subplots()
+        # zoom to contiguous USA
+        xlim = (-2.4e+06, 2.4e+06)
+        ylim = (-2.4e+06, 1.6e+06)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_title(map_title, fontsize=14)
+        #create map object
+        states.plot(ax=ax, facecolor="none", edgecolor="black")
+        map_ref = counties.plot(
+            ax=ax, 
+            column = sym_column, 
+            cmap=color_map, 
+            scheme=scheme,
+            legend = True,
+            legend_kwds={"bbox_to_anchor": (0.6, 0.25), "title":legend_title}
+            )
+        states.plot(ax=ax, facecolor="none", edgecolor="black")
+        map_ref.set_axis_off()
+    
+        # plt.show()
+        pdf.savefig(fig)
+        plt.close(fig)
+    return out_path
 
 def main():
     # download file from SPC site
     csv_file_name = "tornado_data.csv"
-    tornado_file_path = download_file_from_url(tornado_file_url, working_folder, csv_file_name)
+    #tornado_file_path = download_file_from_url(tornado_file_url, working_folder, csv_file_name)
+    tornado_file_path = 'C:\\Dev\\TornadoCountyAnalysis\\tornado_data.csv'
 
     # convert csv file into geodataframe
     START_X_FIELD = "slon"
@@ -114,11 +148,48 @@ def main():
     county_polygons = county_polygons[COUNTY_KEEP_COLUMNS]
     county_polygons = county_polygons.to_crs(PROJECT_SR)  #reproject to working spatial reference
 
+    # download states shapefile
+    state_file_name = "states.zip"
+    state_zip_path = download_file_from_url(states_file_url, working_folder, state_file_name)
+    state_shp_path = zip_to_shp(state_zip_path)
+    state_polygons = geopandas.read_file(state_shp_path)
+    STATE_KEEP_COLUMNS = ['STATE', 'FIPS', 'geometry']
+    state_polygons = state_polygons[STATE_KEEP_COLUMNS]
+    state_polygons = state_polygons.to_crs(PROJECT_SR)  #reproject to working spatial reference
+
     # add tornado attributes to counties
     county_polygons = summarize_tornadoes_by_county(county_polygons, tornado_lines)
 
-    # out_shp = os.path.join(working_folder, "CountiesSummarized.shp")
-    # county_polygons.to_file(out_shp)
-    # print("Shapefile exported to " + out_shp)
+    # export maps
+    tornado_count_map_path = create_static_map(
+        county_polygons,
+        state_polygons,
+        map_title = 'Reported Tornadoes by County, 2000-present',
+        sym_column = 'tor_sqmi',
+        scheme = 'quantiles',
+        color_map = 'Oranges',
+        legend_title = 'Tornadoes per sq. mi.',
+        out_file_name = 'TornadoCountMap.pdf'
+        )
+    tornado_track_map = create_static_map(
+        county_polygons,
+        state_polygons,
+        map_title = 'Tornado Track Length (Meters per square mile), 2000-present',
+        sym_column = 'len_sqmi',
+        scheme = 'quantiles',
+        color_map = 'Reds',
+        legend_title = 'Track m/sqmi',
+        out_file_name = 'TornadoLengthMap.pdf'
+        )
+    tornado_mag_map = create_static_map(
+        county_polygons,
+        state_polygons,
+        map_title = 'Total EF rating of tornadoes in county, 2000-present',
+        sym_column = 'mag_sqmi',
+        scheme = 'quantiles',
+        color_map = 'Purples',
+        legend_title = 'Sum of EF ratings/sqmi',
+        out_file_name = 'TornadoMagnitudeMap.pdf'
+        )
 
 main()

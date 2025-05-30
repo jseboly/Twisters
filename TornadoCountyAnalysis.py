@@ -5,6 +5,7 @@ import os, requests, pandas, geopandas, zipfile, matplotlib, folium, mapclassify
 from shapely.geometry import Point, LineString # type: ignore
 from matplotlib import pyplot as plt # type : ignore
 from matplotlib.backends.backend_pdf import PdfPages
+import branca.colormap as cm
 
 # Globals
 working_folder = "C:\Dev\TornadoCountyAnalysis"  #Set the folder to save output to
@@ -68,7 +69,7 @@ def zip_to_shp(in_zip):
     return out_path
 
 def summarize_tornadoes_by_county(counties_gdf, tornadoes_gdf):
-     # intersect counties with tornadoes
+    # intersect counties with tornadoes
     intersection = tornadoes_gdf.overlay(counties_gdf, how='intersection')
 
     # summarize tornado counts, lengths, and magnitudes by county
@@ -82,14 +83,17 @@ def summarize_tornadoes_by_county(counties_gdf, tornadoes_gdf):
     counties_gdf['count'] = counties_gdf['count'].fillna(0)
     counties_gdf['sum_mag'] = counties_gdf['sum_mag'].fillna(0)
     counties_gdf['sum_len'] = counties_gdf['sum_len'].fillna(0)
+    counties_gdf['sum_len_round'] = counties_gdf['sum_len'].round(0)
 
     # normalize by county area
     M2_TO_MI2 = 2589988.110336  #constant - square meters in a square mile
-    #counties_gdf["area"] = counties_gdf.geometry.area
     counties_gdf["area_sqmi"] = counties_gdf.geometry.area / M2_TO_MI2
     counties_gdf["tor_sqmi"] = counties_gdf["count"] / counties_gdf["area_sqmi"]
     counties_gdf["mag_sqmi"] = counties_gdf["sum_mag"] / counties_gdf["area_sqmi"]
     counties_gdf["len_sqmi"] = counties_gdf["sum_len"] / counties_gdf["area_sqmi"]
+    counties_gdf['tor_sqmi_round'] = counties_gdf['tor_sqmi'].round(3)
+    counties_gdf['mag_sqmi_round'] = counties_gdf['mag_sqmi'].round(3)
+    counties_gdf['len_sqmi_round'] = counties_gdf['len_sqmi'].round(3)
     
     return counties_gdf
 
@@ -119,14 +123,116 @@ def create_static_map(counties, states, map_title, sym_column, color_map, legend
         # plt.show()
         pdf.savefig(fig)
         plt.close(fig)
+    print('Map saved to ' + out_path)
     return out_path
+
+def create_interactive_map(county_polygons, state_polygons):
+    # initialize map
+    m = folium.Map(location=[37.8, -96], zoom_start=4)
+
+    # add tornado count layer
+    colormap1 = cm.LinearColormap(
+        colors=["yellow", "red"],
+        vmin=county_polygons["tor_sqmi"].quantile(0.05),
+        vmax=county_polygons["tor_sqmi"].quantile(0.95)
+    )
+    folium.GeoJson(
+        county_polygons,
+        name="Tornadoes per Square Mile",
+        style_function=lambda feature: {
+            "fillColor": colormap1(feature["properties"]["tor_sqmi"]),
+            "color": "black",
+            "weight": 1,
+            "fillOpacity": 0.7,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["STATE","COUNTYNAME", "tor_sqmi_round"],
+            aliases=["State","County","Tornadoes per sq. mi."]
+            ),
+        popup=folium.GeoJsonPopup(
+            fields=["STATE", "COUNTYNAME", "count", "sum_len", "sum_mag", "tor_sqmi_round", "len_sqmi_round", "mag_sqmi_round"],
+            aliases=["State", "County", "Tornadoes since 2000", "Total tornado track length(m)", "Total Tornado EF-rating",
+                      "Tornadoes per sq. mi.", "Tornado track length (m per sq.mi.)", "Total EF Rating per sq. mi."]
+        )
+    ).add_to(m)
+
+    # add tornado magnitude layer
+    colormap2 = cm.LinearColormap(
+        colors=["yellow", "red"],
+        vmin=county_polygons["mag_sqmi"].quantile(0.05),
+        vmax=county_polygons["mag_sqmi"].quantile(0.95)
+    )
+    folium.GeoJson(
+        county_polygons,
+        name="Total EF Scale Rating per square mile",
+        style_function=lambda feature: {
+            "fillColor": colormap2(feature["properties"]["mag_sqmi"]),
+            "color": "black",
+            "weight": 1,
+            "fillOpacity": 0.7,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["STATE","COUNTYNAME", "mag_sqmi_round"],
+            aliases=["State","County","Total EF Rating per sq. mi."]
+            ),
+        popup=folium.GeoJsonPopup(
+            fields=["STATE", "COUNTYNAME", "count", "sum_len", "sum_mag", "tor_sqmi_round", "len_sqmi_round", "mag_sqmi_round"],
+            aliases=["State", "County", "Tornadoes since 2000", "Total tornado track length(m)", "Total Tornado EF-rating",
+                      "Tornadoes per sq. mi.", "Tornado track length (m per sq.mi.)", "Total EF Rating per sq. mi."]
+        )
+    ).add_to(m)
+
+    # add tornado track length layer
+    colormap3 = cm.LinearColormap(
+        colors=["yellow", "red"],
+        vmin=county_polygons["len_sqmi"].quantile(0.05),
+        vmax=county_polygons["len_sqmi"].quantile(0.95)
+    )
+    folium.GeoJson(
+        county_polygons,
+        name="Tornado Track Length per square mile",
+        style_function=lambda feature: {
+            "fillColor": colormap3(feature["properties"]["len_sqmi"]),
+            "color": "black",
+            "weight": 1,
+            "fillOpacity": 0.7
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["STATE","COUNTYNAME", "len_sqmi_round"],
+            aliases=["State","County","Tornado Track meters per sq. mi."]
+            ),
+        popup=folium.GeoJsonPopup(
+            fields=["STATE", "COUNTYNAME", "count", "sum_len", "sum_mag", "tor_sqmi_round", "len_sqmi_round", "mag_sqmi_round"],
+            aliases=["State", "County", "Tornadoes since 2000", "Total tornado track length(m)", "Total Tornado EF-rating",
+                      "Tornadoes per sq. mi.", "Tornado track length (m per sq.mi.)", "Total EF Rating per sq. mi."]
+        )
+    ).add_to(m)
+
+    # add state outlines
+    folium.GeoJson(
+        state_polygons,
+        name="States",
+        style_function=lambda feature: {
+            "fillColor": "none",  # No fill
+            "color": "black",  # Black outlines
+            "weight": 2,  # Line thickness
+            "opacity": 1,
+        }
+    ).add_to(m)
+
+    # Add layer control
+    folium.LayerControl().add_to(m)
+
+    interactive_map_path = os.path.join(working_folder, "twisters.html")
+    m.save(interactive_map_path)
+    print('Interactive map saved to ' + interactive_map_path)
+    return interactive_map_path
 
 def main():
     # download file from SPC site
     csv_file_name = "tornado_data.csv"
-    #tornado_file_path = download_file_from_url(tornado_file_url, working_folder, csv_file_name)
-    tornado_file_path = 'C:\\Dev\\TornadoCountyAnalysis\\tornado_data.csv'
-
+    tornado_file_path = download_file_from_url(tornado_file_url, working_folder, csv_file_name)
+    
     # convert csv file into geodataframe
     START_X_FIELD = "slon"
     START_Y_FIELD = "slat"
@@ -160,7 +266,12 @@ def main():
     # add tornado attributes to counties
     county_polygons = summarize_tornadoes_by_county(county_polygons, tornado_lines)
 
-    # export maps
+    # simplify geometries to reduce file sizes of maps and improve performance
+    tornado_lines['geometry'] = tornado_lines['geometry'].simplify(tolerance=10)
+    county_polygons['geometry'] = county_polygons['geometry'].simplify(tolerance=1000)
+    state_polygons['geometry'] = state_polygons['geometry'].simplify(tolerance=1000)
+
+    # export static maps
     tornado_count_map_path = create_static_map(
         county_polygons,
         state_polygons,
@@ -191,5 +302,8 @@ def main():
         legend_title = 'Sum of EF ratings/sqmi',
         out_file_name = 'TornadoMagnitudeMap.pdf'
         )
+    
+    # create interactive map
+    interactive_map = create_interactive_map(county_polygons, state_polygons)
 
 main()

@@ -30,4 +30,9 @@ Here are the steps I followed to obtain these results for each county:
 These three maps are visible in this repository as TornadoCountMap.pdf, TornadoMagnitudeMap.pdf, and TornadoLengthMap.pdf.
 Additionally, I created an interactive map containing a separate layer for each of these variables using the Folium library. The file size with all three layers included was too large to upload to GitHub, so I have included a pared down version containing only tornado counts that is in the repository as twisters.html.
 
+## PART 2 - County-Specific Maps
+In this part, I used the datasets produced by the Python script from Part 1 to create a QGIS project with an atlas. In the atlas, each U.S. county gets its own page. Each page contains all tornado tracks since 2000, clipped to the outline of the county. At the bottom of each map is a summary area that shows the count, total length, and total magnitude of all the tornadoes depicted on the map. These all key off of fields in the county shapefile that was produced as part of the output from Part 1. The file ShelbyCountyTornadoesQGIS.pdf is provided as a sample page from this atlas.
+
+As a supplement to this, the TornadoCountyMapCreator.py script demonstrates a method for doing this all programmatically using the geopandas and matplotlib modules. It pulls the tornado and county datasets from the SPC website, converts them into geo data frames, and then for the specified county it clips the tornado tracks to the county outline and plots it all on the map. The file ShelbyCountyTornadoes.png is a sample of what this script produces.
+
 Hope you enjoy and learn something from perusing this data! Please reach out to jseboly@gmail.com with any questions or comments.
